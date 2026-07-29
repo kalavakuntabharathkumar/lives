@@ -1,0 +1,14 @@
+{
+  "name": "liveroom",
+  "version": "1.0.0",
+  "description": "Real-time chat rooms with Socket.io, Firebase phone OTP auth, and Firestore persistence",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "firebase-admin": "^12.1.0"
+  }
+}
