@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>LiveRoom — Real-Time Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 20px; min-height: 100vh; display: flex; flex-direction: column; }
+  h1 { font-size: 20px; }
+  input, button { font-size: 15px; padding: 10px; border-radius: 8px; border: 1px solid #334155; }
+  input { background: #1e293b; color: #fff; width: 100%; margin-bottom: 8px; }
+  button { background: #6366f1; color: #fff; border: none; cursor: pointer; }
+  button:hover { background: #4f46e5; }
+  #auth-box, #room-box { display: flex; flex-direction: column; gap: 8px; }
+  #chat-box { display: none; flex: 1; flex-direction: column; }
+  #messages { flex: 1; overflow-y: auto; background: #1e293b; border-radius: 8px; padding: 10px; margin: 10px 0; min-height: 300px; max-height: 50vh; }
+  .msg { margin-bottom: 8px; }
+  .msg b { color: #818cf8; }
+  .sys { color: #94a3b8; font-style: italic; font-size: 13px; }
+  #users { font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
+  #typing { font-size: 12px; color: #a5b4fc; height: 16px; }
+  .row { display: flex; gap: 8px; }
+  .row input { flex: 1; margin-bottom: 0; }
+  #recaptcha-container { margin: 6px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>💬 LiveRoom</h1>
+
+  <!-- Step 1: Phone OTP auth -->
+  <div id="auth-box">
+    <p>Sign in with your phone number</p>
+    <input id="phone" placeholder="+1 555 123 4567" />
+    <div id="recaptcha-container"></div>
+    <button onclick="sendOtp()">Send OTP</button>
+    <input id="otp" placeholder="Enter OTP" style="display:none" />
+    <button id="verifyBtn" style="display:none" onclick="verifyOtp()">Verify & Sign In</button>
+    <p id="auth-status" class="sys"></p>
+  </div>
+
+  <!-- Step 2: Join a room -->
+  <div id="room-box" style="display:none">
+    <input id="displayName" placeholder="Display name" />
+    <input id="roomId" placeholder="Room ID (e.g. general)" value="general" />
+    <button onclick="joinRoom()">Join Room</button>
+  </div>
+
+  <!-- Step 3: Chat -->
+  <div id="chat-box">
+    <div id="users"></div>
+    <div id="messages"></div>
+    <div id="typing"></div>
+    <div class="row">
+      <input id="msgInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendMessage()" oninput="socket.emit('typing')" />
+      <button onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script>
+  // TODO: replace with your Firebase project config
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    projectId: "YOUR_PROJECT",
+  };
+  firebase.initializeApp(firebaseConfig);
+
+  let confirmationResult = null;
+  window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', { size: 'normal' });
+
+  function sendOtp() {
+    const phone = document.getElementById('phone').value.trim();
+    if (!phone) return alert('Enter a phone number');
+    firebase.auth().signInWithPhoneNumber(phone, window.recaptchaVerifier)
+      .then((result) => {
+        confirmationResult = result;
+        document.getElementById('otp').style.display = 'block';
+        document.getElementById('verifyBtn').style.display = 'block';
+        document.getElementById('auth-status').textContent = 'OTP sent. Check your phone.';
+      })
+      .catch((err) => {
+        document.getElementById('auth-status').textContent = 'Error: ' + err.message;
+      });
+  }
+
+  function verifyOtp() {
+    const code = document.getElementById('otp').value.trim();
+    confirmationResult.confirm(code)
+      .then((res) => {
+        document.getElementById('auth-status').textContent = 'Signed in as ' + res.user.phoneNumber;
+        document.getElementById('auth-box').style.display = 'none';
+        document.getElementById('room-box').style.display = 'flex';
+        document.getElementById('displayName').value = res.user.phoneNumber;
+      })
+      .catch((err) => {
+        document.getElementById('auth-status').textContent = 'Invalid code: ' + err.message;
+      });
+  }
+
+  // --- Socket.io chat logic ---
+  const socket = io();
+  let typingTimeout;
+
+  function joinRoom() {
+    const name = document.getElementById('displayName').value.trim() || 'Anonymous';
+    const roomId = document.getElementById('roomId').value.trim() || 'general';
+    socket.emit('join_room', { roomId, name });
+    document.getElementById('room-box').style.display = 'none';
+    document.getElementById('chat-box').style.display = 'flex';
+  }
+
+  function sendMessage() {
+    const input = document.getElementById('msgInput');
+    const text = input.value.trim();
+    if (!text) return;
+    socket.emit('send_message', { text });
+    input.value = '';
+  }
+
+  function appendMessage(html, cls) {
+    const div = document.createElement('div');
+    div.className = 'msg' + (cls ? ' ' + cls : '');
+    div.innerHTML = html;
+    const box = document.getElementById('messages');
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  socket.on('history', (msgs) => msgs.forEach((m) => appendMessage(`<b>${m.user}:</b> ${m.text}`)));
+  socket.on('new_message', (m) => appendMessage(`<b>${m.user}:</b> ${m.text}`));
+  socket.on('system_message', (t) => appendMessage(t, 'sys'));
+  socket.on('user_list', (users) => {
+    document.getElementById('users').textContent = 'Online: ' + users.join(', ');
+  });
+  socket.on('user_typing', (name) => {
+    const el = document.getElementById('typing');
+    el.textContent = `${name} is typing...`;
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => (el.textContent = ''), 1500);
+  });
+</script>
+</body>
+</html>
